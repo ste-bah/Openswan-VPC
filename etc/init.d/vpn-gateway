@@ -1,0 +1,310 @@
+#!/bin/bash
+
+#This script is installed in a base Amazon linux AMI and runs on startup.
+#The following yum commands were run on the Amazon linux instance before the AMI was created
+#  -  sudo yum install openswan quagga
+#  -  sudo yum erase ipsec-tools
+
+#PRECONDITIONS
+# 1. You have launched a linux instance using AMI-XXX?
+
+# 2. security group has the following inbound rules
+#  - UDP port 500 allow
+#  - TCP port 179 allow 
+
+# 3. An EIP is attached to this instance and that IP is passed in as CGW_OUTSIDE_IP
+# CGW_OUTSIDE_IP=54.200.2.26
+
+# 5. The two VGW outside IPs were passed in as VGW_TUNNEL1_OUTSIDE_IP and VGW_TUNNEL2_OUTSIDE_IP
+# VGW_TUNNEL1_OUTSIDE_IP=203.83.222.236
+# VGW_TUNNEL2_OUTSIDE_IP=203.83.222.237
+
+# 6. The two TUNNEL secrets were passed in as TUNNEL1_SECRET and TUNNEL2_SECRET
+# TUNNEL1_SECRET="secret key"
+# TUNNEL2_SECRET="secret key"
+
+### BEGIN INIT INFO
+# Provides:          VPN Customer Gateway 
+# Required-Start:    $network $remote_fs $syslog $named
+# Required-Stop:     $syslog $remote_fs
+# Default-Start:
+# Default-Stop:      0 1 6
+# Short-Description: Start VPN Customer Gateway at boot time
+# Description:       Start VPN Customer Gateway at boot time
+### END INIT INFO
+#
+### Default-Start:     2 3 4 5
+#
+# chkconfig: - 47 76
+# description: Start VPN Customer Gateway at boot time
+
+prog=$(basename $0)
+logger="logger -t $prog"
+
+if [ `id -u` -ne 0 ]
+then
+    echo "permission denied (must be superuser)" |
+      logger -s -p daemon.error -t $prog 2>&1
+    exit 4
+fi
+
+RETVAL=0
+
+setup_environment() {
+  curl="curl --retry 3 --silent --show-error --fail"
+  instance_userdata_url=http://169.254.169.254/2012-01-12/user-data
+  instance_metadata_url=http://169.254.169.254/latest/meta-data
+  ox='ip netns exec openswan'
+
+  # Wait until meta-data is available.
+  perl -MIO::Socket::INET -e '
+   until(new IO::Socket::INET("169.254.169.254:80")){print"Waiting for meta-data...\n";sleep 1}
+       ' | $logger
+
+  ENVIRONMENT_VARIABLES=`$curl -s $instance_userdata_url`
+  eval $ENVIRONMENT_VARIABLES
+
+  INSTANCE_IP=`$curl -s $instance_metadata_url/local-ipv4`
+  QUAGGA_PASSWORD=testPassword
+  GATEWAY_IP=169.254.255.1
+  NAMESPACE_TUNNEL1_IP=169.254.255.2
+  NAMESPACE_TUNNEL2_IP=169.254.255.3
+}
+
+create_files() {
+  #create ipsec config files
+  cat <<EOF > /etc/ipsec.conf
+# /etc/ipsec.conf - Openswan IPsec configuration file
+#
+# Manual:     ipsec.conf.5
+#
+# Please place your own config files in /etc/ipsec.d/ ending in .conf
+
+version 2.0     # conforms to second version of ipsec.conf specification
+
+# basic configuration
+config setup
+        protostack=netkey
+        nat_traversal=no
+        virtual_private=
+        oe=off
+
+include /etc/ipsec.d/*.conf
+EOF
+
+  chmod 600 /etc/ipsec.conf
+
+  cat <<EOF > /etc/ipsec.d/aws.conf
+conn awstunnel1
+        authby=secret
+        auto=start
+        left=$NAMESPACE_TUNNEL1_IP
+        leftid=$NAMESPACE_TUNNEL1_IP
+        right=$VGW_TUNNEL1_OUTSIDE_IP
+        rightid=$VGW_TUNNEL1_OUTSIDE_IP
+        type=tunnel
+        ikelifetime=8h
+        keylife=1h
+        phase2alg=aes128-sha1;modp1024
+        ike=aes128-sha1
+        auth=esp
+        keyingtries=%forever
+        aggrmode=no
+        keyexchange=ike
+        ikev2=never
+        leftsubnet=$VGW_TUNNEL1_INSIDE_IP/30
+        rightsubnet=0.0.0.0/0
+        dpddelay=10
+        dpdtimeout=30
+        dpdaction=restart_by_peer
+
+conn awstunnel2
+        authby=secret
+        auto=start
+        left=$NAMESPACE_TUNNEL2_IP
+        leftid=$NAMESPACE_TUNNEL2_IP
+        right=$VGW_TUNNEL2_OUTSIDE_IP
+        rightid=$VGW_TUNNEL2_OUTSIDE_IP
+        type=tunnel
+        ikelifetime=8h
+        keylife=1h
+        phase2alg=aes128-sha1;modp1024
+        ike=aes128-sha1
+        auth=esp
+        keyingtries=%forever
+        aggrmode=no
+        keyexchange=ike
+        ikev2=never
+        leftsubnet=$VGW_TUNNEL2_INSIDE_IP/30
+        rightsubnet=0.0.0.0/0
+        dpddelay=10
+        dpdtimeout=30
+        dpdaction=restart_by_peer
+EOF
+
+  chmod 644 /etc/ipsec.d/aws.conf
+
+
+  cat <<EOF > /etc/ipsec.d/awstunnel1.secrets
+$NAMESPACE_TUNNEL1_IP $VGW_TUNNEL1_OUTSIDE_IP: PSK "$TUNNEL1_SECRET"
+EOF
+
+  chmod 644 /etc/ipsec.d/awstunnel1.secrets
+
+  cat <<EOF > /etc/ipsec.d/awstunnel2.secrets
+$NAMESPACE_TUNNEL2_IP $VGW_TUNNEL2_OUTSIDE_IP: PSK "$TUNNEL2_SECRET"
+EOF
+
+  chmod 644 /etc/ipsec.d/awstunnel2.secrets
+
+  #Setup BGP
+  cat <<EOF > /etc/quagga/bgpd.conf
+hostname $HOSTNAME
+password $QUAGGA_PASSWORD
+enable password $QUAGGA_PASSWORD
+!
+log file /var/log/quagga/bgpd.log
+debug bgp events
+debug bgp zebra
+debug bgp updates
+!
+router bgp 65000
+    bgp router-id $CGW_OUTSIDE_IP
+    network $CGW_TUNNEL1_INSIDE_IP/30
+    network $CGW_TUNNEL2_INSIDE_IP/30
+    network 0.0.0.0/0
+    neighbor $VGW_TUNNEL1_INSIDE_IP remote-as $AWS_ASN 
+    neighbor $VGW_TUNNEL2_INSIDE_IP remote-as $AWS_ASN 
+line vty
+EOF
+
+  chmod 640 /etc/quagga/bgpd.conf
+  chown quagga:quagga /etc/quagga/bgpd.conf
+
+  cat <<EOF > /etc/quagga/zebra.conf
+hostname $HOSTNAME
+password $QUAGGA_PASSWORD
+enable password $QUAGGA_PASSWORD
+interface eth0
+interface lo
+line vty
+EOF
+
+  chmod 640 /etc/quagga/zebra.conf
+  chown quagga:quagga /etc/quagga/zebra.conf
+}
+
+setup_network() {
+  #Create a network namespace
+  ip netns add openswan
+
+  #Create interfaces and assign IP
+  ip link add type veth
+  ip link set dev veth1 netns openswan
+  ip link set dev veth0 name toopenswan
+  ip addr add dev toopenswan $GATEWAY_IP/28
+  $ox ip link set dev veth1 name eth0
+  $ox ip addr add dev eth0 $NAMESPACE_TUNNEL1_IP/28
+  $ox ip addr add dev eth0 $NAMESPACE_TUNNEL2_IP/28
+  $ox ip addr add dev eth0 $CGW_TUNNEL1_INSIDE_IP/30
+  $ox ip addr add dev eth0 $CGW_TUNNEL2_INSIDE_IP/30
+  ip link set toopenswan up
+  $ox ip link set eth0 up
+  $ox ip link set lo up
+
+  #Configure routing
+  iptables -t nat -D PREROUTING -s $VGW_TUNNEL1_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL1_IP
+  iptables -t nat -A PREROUTING -s $VGW_TUNNEL1_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL1_IP
+  iptables -t nat -D POSTROUTING -d $VGW_TUNNEL1_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP
+  iptables -t nat -A POSTROUTING -d $VGW_TUNNEL1_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP 
+
+  iptables -t nat -D PREROUTING -s $VGW_TUNNEL2_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL2_IP
+  iptables -t nat -A PREROUTING -s $VGW_TUNNEL2_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL2_IP
+  iptables -t nat -D POSTROUTING -d $VGW_TUNNEL2_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP
+  iptables -t nat -A POSTROUTING -d $VGW_TUNNEL2_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP 
+
+  $ox ip r add default via $GATEWAY_IP
+  sysctl -w net.ipv4.conf.all.forwarding=1
+}
+
+teardown_network() {
+	ip link delete toopenswan type veth
+  ip link delete veth0 type veth
+  ip link delete veth1 type veth
+  ip netns delete openswan
+
+  iptables -t nat -D PREROUTING -s $VGW_TUNNEL1_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL1_IP
+  iptables -t nat -D POSTROUTING -d $VGW_TUNNEL1_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP
+  iptables -t nat -D PREROUTING -s $VGW_TUNNEL2_OUTSIDE_IP/32 -i eth0 -j DNAT --to-destination $NAMESPACE_TUNNEL2_IP
+  iptables -t nat -D POSTROUTING -d $VGW_TUNNEL2_OUTSIDE_IP/32 -j SNAT --to-source $INSTANCE_IP
+
+  sysctl -w net.ipv4.conf.all.forwarding=0
+}
+
+start_control_plane() {
+  $ox /etc/init.d/ipsec restart
+  $ox /etc/init.d/zebra restart
+  $ox /etc/init.d/bgpd restart
+}
+
+stop_control_plane() {
+  $ox /etc/init.d/bgpd stop
+  $ox /etc/init.d/zebra stop 
+  $ox /etc/init.d/ipsec stop 
+}
+
+delete_files() {
+  rm /etc/ipsec.conf
+  rm /etc/ipsec.d/aws.conf
+  rm /etc/ipsec.d/awstunnel1.secrets
+  rm /etc/ipsec.d/awstunnel2.secrets
+  rm /etc/quagga/bgpd.conf
+  rm /etc/quagga/zebra.conf
+}
+
+start() {
+    (
+    setup_environment
+    create_files
+    setup_network
+    start_control_plane
+    RETVAL=$? 
+    ) 2>&1 | $logger
+    return $RETVAL
+}
+
+
+stop() {
+    (
+    stop_control_plane
+    teardown_network
+    delete_files
+    RETVAL=$? 
+    ) 2>&1 | $logger
+    return $RETVAL
+}
+
+restart() {
+    stop
+    start
+}
+
+# do it
+case "$1" in
+    start|--start)
+         start
+         ;;
+    stop|--stop)
+         stop
+         ;;
+    restart|--restart)
+         restart
+ 	 ;;
+    *)
+         echo "Usage: $prog {start|stop|restart}"
+         RETVAL=2
+esac
+ 	
+exit $RETVAL
+
+
