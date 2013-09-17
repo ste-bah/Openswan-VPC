@@ -24,19 +24,14 @@
 # TUNNEL2_SECRET="secret key"
 
 ### BEGIN INIT INFO
-# Provides:          VPN Customer Gateway 
-# Required-Start:    $network $remote_fs $syslog $named
+# Provides:          VPN Gateway to AWS VPC 
+# Required-Start:    $network $remote_fs $syslog
 # Required-Stop:     $syslog $remote_fs
-# Default-Start:
+# Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Start VPN Customer Gateway at boot time
 # Description:       Start VPN Customer Gateway at boot time
 ### END INIT INFO
-#
-### Default-Start:     2 3 4 5
-#
-# chkconfig: - 47 76
-# description: Start VPN Customer Gateway at boot time
 
 prog=$(basename $0)
 logger="logger -t $prog"
