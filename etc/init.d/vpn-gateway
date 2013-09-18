@@ -17,6 +17,7 @@
 
 # 6. Stop the EC2 instance and configure the following User Data (click on Instance Actions > View/Change User Data). Get the values from the VPN Download Configuration feature on the VPC Console.
 #  CGW_OUTSIDE_IP=54.200.28.117
+#  CUSTOMER_ASN=65000
 #  AWS_ASN=17493
 #  VGW_TUNNEL1_OUTSIDE_IP=203.83.222.236
 #  CGW_TUNNEL1_INSIDE_IP=169.254.251.26
@@ -179,7 +180,7 @@ debug bgp events
 debug bgp zebra
 debug bgp updates
 !
-router bgp 65000
+router bgp $CUSTOMER_ASN
     bgp router-id $CGW_OUTSIDE_IP
     network $CGW_TUNNEL1_INSIDE_IP/30
     network $CGW_TUNNEL2_INSIDE_IP/30
