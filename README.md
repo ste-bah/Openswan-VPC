@@ -32,8 +32,14 @@ Now you will create an EC2 instance to ask the Customer Gateway and install Open
 
 1. Launch a new Amazon Linux instance from the EC2 console where you created the Elastic IP in the previous step. Edit the advanced options and put in the User Data. Select default security group and uncheck the box "auto assign public IP" since you will be using the Elastic IP as the public IP.
 2. Configure the default security group to allow inbound connections to UPD/500 and TCP/179 from the Outside IP Addresses of the Virtual Private Gateway. These values are available in the VPN configuration file.
-3. After the instance launches copy the Openswan-VPC vpn-gateway file to /etc/init.d and configure it to start on bootup, sudo chkconfig --add vpn-gateway
-4. Install the openswan software using sudo yum install openswan quagga
+3. After the instance launches copy the Openswan-VPC vpn-gateway file to /etc/init.d and configure it to start on bootup.
+
+        sudo chkconfig --add vpn-gateway
+
+4. Install the openswan software
+
+        sudo yum install openswan quagga
+
 5. Associate the Elastic IP with the instance and then reboot the instance.
 
 ### Testing the configuration
