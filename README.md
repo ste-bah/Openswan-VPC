@@ -1,7 +1,7 @@
 # Openswan-VPC
 ## What is Openswan?
 <a href="https://www.openswan.org/projects/openswan">Openswan</a> is a software based IPSEC VPN. 
-## What is Openswan-VCP?
+## What is Openswan-VPC?
 Openswan-VPC adds a init.d style start/stop script for connecting Openswan to an AWS Virtual Private Cloud (VPC) using the VPN gateway.
 
 ## How do I use this?
