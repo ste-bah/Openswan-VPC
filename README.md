@@ -47,4 +47,5 @@ To test, do the following.
 3. check that you are receiving routes for your VPC
     route -n 
 4. ping your Linux instance inside the VPC
-    ping <Linux instance inside VPC>
+
+        ping <Linux instance inside VPC>
