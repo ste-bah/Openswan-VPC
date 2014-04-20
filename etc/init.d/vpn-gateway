@@ -51,7 +51,13 @@
 ### END INIT INFO
 
 prog=$(basename $0)
-logger="logger -t $prog"
+# if DEBUG is set (to anything but '0') send a copy of the output to /dev/tty so the caller
+# can see the messages without checking the system logs
+if [ "$DEBUG" -a "$DEBUG" != 0 ]; then
+    logger="logger -s -t $prog"
+else
+    logger="logger -t $prog"
+fi
 
 if [ `id -u` -ne 0 ]
 then
