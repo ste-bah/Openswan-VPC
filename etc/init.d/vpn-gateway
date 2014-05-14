@@ -294,6 +294,7 @@ start() {
 
 stop() {
     (
+    setup_environment
     stop_control_plane
     teardown_network
     delete_files
