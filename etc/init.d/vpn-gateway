@@ -1,44 +1,15 @@
 #!/bin/bash
-# This script will startup a VPN connection to an AWS VPC. It usese the Openswan package running on an EC2 instance.
-# 1. Start an Amazon Linux instance using the EC2 console and run the following yum commands
-#  $ sudo yum install openswan quagga
-#  $ sudo yum erase ipsec-tools
-# 
-# 2. copy this script to /etc/init.d/vpn-gateway and run this command to start on boot
-#  $ chkconfig --add vpn-gateway
-
-# 3. Make sure the inbound rules are configured in your EC2 security group
-#   UDP port 500 allow
-#   TCP port 179 allow 
-
-# 4. Create an Elastic IP and attach it to the EC2 instance using the EC Console
-# 
-# 5. Create a VPC, a VGW, a CGW (use the Elastic IP from the last step as IP address), and a VPN using the VPC Console
-
-# 6. Stop the EC2 instance and configure the following User Data (click on Instance Actions > View/Change User Data). Get the values from the VPN Download Configuration feature on the VPC Console.
-#  CGW_OUTSIDE_IP=54.200.28.117
-#  CUSTOMER_ASN=65000
-#  AWS_ASN=17493
-#  VGW_TUNNEL1_OUTSIDE_IP=203.83.222.236
-#  CGW_TUNNEL1_INSIDE_IP=169.254.251.26
-#  VGW_TUNNEL1_INSIDE_IP=169.254.251.25
-#  TUNNEL1_SECRET="secret key"
-#  VGW_TUNNEL2_OUTSIDE_IP=203.83.222.237
-#  CGW_TUNNEL2_INSIDE_IP=169.254.251.30
-#  VGW_TUNNEL2_INSIDE_IP=169.254.251.29
-#  TUNNEL2_SECRET="secret key"
 #
-# 7. Reboot the instance and test the configuration by launching a Linux instance in your VPC and pinging that instance
-#  $ ip netns exec openswan ping <IP address in your VPC>
+# Test the configuration:
+# $ ip netns exec openswan ping <IP address in your VPC>
 #
-# 8. If you need to troubleshoot the connectivity, the following commands are useful.
+# Troubleshoot connectivity:
 ## Check the IPSEC SA
 #  $ ip netns exec openswan ip xfrm state
 # 
 ## Check the BGP Neighbor (use testPassword as the password)
 #  $ ip netns exec openswan telnet 127.0.0.1 2605
 #  > show ip bgp summary
-
 
 ### BEGIN INIT INFO
 # Provides:          VPN Gateway to AWS VPC 
@@ -70,7 +41,6 @@ RETVAL=0
 
 setup_environment() {
   curl="curl --retry 3 --silent --show-error --fail"
-  instance_userdata_url=http://169.254.169.254/2012-01-12/user-data
   instance_metadata_url=http://169.254.169.254/latest/meta-data
   ox='ip netns exec openswan'
 
@@ -79,8 +49,7 @@ setup_environment() {
    until(new IO::Socket::INET("169.254.169.254:80")){print"Waiting for meta-data...\n";sleep 1}
        ' | $logger
 
-  ENVIRONMENT_VARIABLES=`$curl -s $instance_userdata_url`
-  eval $ENVIRONMENT_VARIABLES
+  . /etc/aws-vpn.conf
 
   INSTANCE_IP=`$curl -s $instance_metadata_url/local-ipv4`
   QUAGGA_PASSWORD=testPassword
